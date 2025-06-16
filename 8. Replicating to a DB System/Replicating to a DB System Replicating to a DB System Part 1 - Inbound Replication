@@ -1,0 +1,171 @@
+Replicando para um DB System Parte 1 - Replicação de Entrada HeatWave MySQL
+A replicação é um conceito fundamental em bancos de dados para alta disponibilidade, escalabilidade e recuperação de desastres. No contexto do MySQL HeatWave na Oracle Cloud Infrastructure (OCI), a Replicação de Entrada (Inbound Replication) refere-se ao processo onde um DB System MySQL HeatWave atua como um replica (ou slave), recebendo e aplicando alterações de dados de um servidor MySQL externo (o source ou master).
+
+Este documento foca na configuração e nos conceitos da replicação de entrada para seu DB System MySQL HeatWave.
+
+1. O que é Replicação de Entrada?
+A replicação de entrada permite que um DB System MySQL HeatWave na OCI se mantenha sincronizado com uma instância MySQL externa. A instância externa pode ser:
+
+Um servidor MySQL on-premises.
+
+Um servidor MySQL em uma máquina virtual (VM) em outra nuvem ou na própria OCI.
+
+Outro serviço MySQL, desde que ele possa ser configurado como um source de replicação.
+
+O processo básico envolve o servidor source gravando todas as alterações de dados em seus logs binários (binary logs). O DB System HeatWave replica então lê esses logs binários do source e aplica as mesmas alterações em sua própria instância, mantendo-se atualizado.
+
+2. Por que Usar a Replicação de Entrada?
+Existem vários casos de uso importantes para a replicação de entrada:
+
+Migração de Dados: Migrar dados de um ambiente MySQL existente (on-premises ou outra nuvem) para o MySQL HeatWave na OCI com tempo de inatividade mínimo. Você pode configurar a replicação, aguardar a sincronização completa e, em seguida, fazer o switch para o DB System HeatWave.
+
+Sincronização Híbrida: Manter uma instância MySQL on-premises ou em outra nuvem como primária, enquanto usa o MySQL HeatWave na OCI para cargas de trabalho secundárias, como análises (aproveitando o HeatWave Cluster) ou relatórios.
+
+Recuperação de Desastres (DR) entre Ambientes: Ter uma cópia atualizada do seu banco de dados primário em um ambiente de nuvem diferente, que pode ser promovido em caso de falha do primário.
+
+Descarregamento de Cargas de Trabalho: Reduzir a carga sobre o servidor source direcionando algumas consultas de leitura para o DB System HeatWave replica.
+
+3. Pré-requisitos para a Replicação de Entrada
+Antes de configurar a replicação de entrada para seu DB System MySQL HeatWave, os seguintes pré-requisitos devem ser atendidos:
+
+3.1. Servidor MySQL Source (Master)
+Habilitar Logs Binários: O servidor source deve ter os logs binários (binary logging) habilitados. Isso é fundamental para a replicação.
+
+No arquivo my.cnf (ou equivalente), garanta que log_bin esteja configurado:
+
+[mysqld]
+log_bin = mysql-bin
+binlog_format = ROW # ROW é geralmente preferido para segurança e robustez
+server_id = <um ID único para o source>
+
+Reinicie o servidor MySQL source após alterar essas configurações.
+
+server_id Único: Cada servidor MySQL (source e replica) envolvido na replicação deve ter um server_id único.
+
+Usuário de Replicação: Crie um usuário no servidor source com privilégios de replicação. Este usuário será usado pelo DB System HeatWave para se conectar e ler os logs binários.
+
+CREATE USER 'repl_user'@'%' IDENTIFIED BY 'sua_senha_segura';
+GRANT REPLICATION SLAVE ON *.* TO 'repl_user'@'%';
+FLUSH PRIVILEGES;
+
+Conectividade de Rede: O DB System MySQL HeatWave na OCI deve ser capaz de se conectar ao servidor source pela rede.
+
+Configure as regras de firewall (Security Lists/Network Security Groups na OCI, e firewalls no servidor source) para permitir tráfego na porta MySQL (padrão 3306) do DB System HeatWave para o source.
+
+Se o source estiver on-premises ou em outra VCN, pode ser necessário configurar um Gateway de Serviço, VPN Connect, FastConnect ou Peering Local/Remoto.
+
+Dados Iniciais (Snapshot): O DB System HeatWave replica deve começar com uma cópia consistente dos dados do servidor source. Você pode exportar os dados do source (usando mysqldump ou MySQL Shell dumpInstance) e importá-los para o DB System HeatWave antes de iniciar a replicação. É crucial garantir que os logs binários e a posição de GTID (se usado) sejam registrados no momento do snapshot.
+
+3.2. DB System MySQL HeatWave (Replica)
+DB System Provisionado: Você já deve ter um DB System MySQL HeatWave provisionado na OCI.
+
+server_id Único: O DB System HeatWave terá um server_id único gerado automaticamente, diferente do seu source.
+
+4. Configurando a Replicação de Entrada na OCI
+A OCI simplifica a configuração da replicação de entrada através do console ou da CLI.
+
+4.1. Coletando Informações do Servidor Source
+Antes de iniciar a replicação, você precisará de informações do seu servidor source:
+
+Endereço IP ou Nome de Host: O endereço de rede do servidor source.
+
+Porta: A porta MySQL do servidor source (padrão 3306).
+
+Usuário de Replicação: repl_user (ou o nome que você criou).
+
+Senha de Replicação: A senha para o repl_user.
+
+GTID ou Posição do Binlog:
+
+GTID (Global Transaction Identifiers): Altamente recomendado para replicação. Se habilitado no source, é mais robusto.
+
+Obtenha o GTID_EXECUTED atual no source:
+
+SELECT @@GLOBAL.GTID_EXECUTED;
+
+Posição do Binlog (File and Position): Se GTID não estiver habilitado, você precisará do nome do arquivo de log binário e da posição dentro dele.
+
+No source, execute:
+
+SHOW MASTER STATUS;
+
+Anote File e Position.
+
+4.2. Usando o Console do OCI para Configurar a Replicação
+Acesse o Console do OCI.
+
+Navegue até Bancos de Dados > MySQL HeatWave.
+
+Selecione o DB System MySQL HeatWave que você deseja configurar como replica.
+
+Na página de detalhes do DB System, no menu Recursos, clique em Canais de Replicação.
+
+Clique em Criar Canal de Replicação.
+
+Preencha os detalhes do canal de replicação:
+
+Nome: Um nome descritivo para o canal de replicação.
+
+Source DB System (Externo): Marque esta opção.
+
+Nome do Host do Source / Endereço IP: Insira o IP ou nome do host do seu servidor MySQL source.
+
+Porta do Source: A porta MySQL do source (padrão 3306).
+
+Usuário de Replicação: O nome de usuário (repl_user) criado no source.
+
+Senha de Replicação: A senha para o usuário de replicação.
+
+Endereço SSL/TLS (Opcional): Se o seu source usar SSL/TLS, você pode fornecer os detalhes aqui (CA certificate, Server certificate, Client certificate, Client private key). É altamente recomendável usar SSL/TLS para conexões seguras.
+
+Ponto de Início da Replicação:
+
+GTID: Selecione esta opção se o GTID estiver habilitado no seu source e forneça o GTID_EXECUTED coletado.
+
+File and Position: Selecione esta opção se não estiver usando GTID e forneça o nome do arquivo de log binário e a posição coletados.
+
+Nome do Grupo de Replicação (Opcional): Para replicação de Multi-Source, mas não se aplica a este cenário de replicação simples de entrada.
+
+Clique em Criar Canal de Replicação.
+
+
+
+docs.oracle.com
+O OCI tentará estabelecer a conexão e iniciar a replicação. Você poderá monitorar o status do canal de replicação na mesma seção Canais de Replicação.
+
+5. Verificando o Status da Replicação
+Após criar o canal, é fundamental verificar seu status para garantir que a replicação esteja funcionando corretamente.
+
+No Console do OCI: A seção Canais de Replicação do seu DB System mostrará o status do canal (e.g., Ativo, Inativo, Erro).
+
+No MySQL Shell/Cliente MySQL: Conecte-se ao seu DB System HeatWave replica e execute:
+
+SHOW REPLICA STATUS\G
+
+Ou para versões mais antigas do MySQL:
+
+SHOW SLAVE STATUS\G
+
+Procure por:
+
+Slave_IO_Running: Yes
+
+Slave_SQL_Running: Yes
+
+Last_IO_Error: e Last_SQL_Error: devem estar vazios.
+
+Seconds_Behind_Master: deve ser 0 ou um número muito baixo, indicando que a replica está atualizada.
+
+6. Considerações Importantes
+Consistência Inicial dos Dados: A fase de importação inicial dos dados é crítica. Qualquer inconsistência ou dado ausente antes do início da replicação resultará em inconsistências persistentes.
+
+Impacto no Desempenho do Source: A replicação adiciona uma pequena carga ao servidor source devido à leitura dos logs binários. Monitore o desempenho do source.
+
+Segurança: Use senhas fortes para o usuário de replicação e configure SSL/TLS para criptografar o tráfego de replicação entre o source e a OCI.
+
+Monitoramento Contínuo: Monitore regularmente o status da replicação para identificar e resolver problemas rapidamente.
+
+Manutenção do Source: Garanta que o servidor source mantenha logs binários pelo tempo necessário para que a replica possa alcançá-lo em caso de interrupção.
+
+Conclusão
+A replicação de entrada para um DB System MySQL HeatWave na OCI é uma ferramenta poderosa para integrar seus dados MySQL de ambientes externos à nuvem, facilitando migrações, configurações híbridas e estratégias de recuperação de desastres. Seguindo os pré-requisitos e as etapas de configuração, você pode estabelecer um fluxo de dados robusto e confiável para seu ambiente MySQL HeatWave. Na Parte 2, abordaremos a Replicação de Saída (Outbound Replication).
